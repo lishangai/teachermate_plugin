@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "微助教PPT下载器Pro",
+  "version": "3.1",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "webRequest",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.wezhujiao.com/*",
+    "*://vip.ow365.cn/*",
+    "*://app.teachermate.com.cn/*",
+    "*://*.teachermate.com.cn/*",
+    "*://*.teachermate.cn/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "32": "icon32.png"
+    }
+  },
+  "content_scripts": [{
+    "matches": [
+        "*://*.wezhujiao.com/*", 
+        "*://*.teachermate.com.cn/*",
+        "*://*.teachermate.cn/*"
+    ],
+    "js": ["content.js"],
+    "css": ["styles.css"],
+    "run_at": "document_end"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["*.woff2"],
+    "matches": ["*://*/*"]
+  }]
+} 

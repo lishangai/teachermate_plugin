@@ -1,0 +1,179 @@
+/* Styles for content script injected elements */
+.ppt-download-btn {
+  background: linear-gradient(135deg, #6B46C1 0%, #4299E1 100%);
+  border-radius: 8px;
+  padding: 4px 10px; /* Slightly smaller padding */
+  margin-left: 8px; /* Add space between link and button */
+  color: white !important;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  font-size: 0.9em; /* Slightly smaller font */
+  vertical-align: middle; /* Align with text link */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.ppt-download-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ppt-download-btn:active {
+    transform: scale(0.98);
+}
+
+/* Styles for popup.html */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f7f9;
+  margin: 0;
+  padding: 15px;
+  width: 350px; /* Fixed width for consistency */
+  color: #333;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px; /* Spacing between elements */
+}
+
+h3 {
+  color: #2c3e50;
+  margin: 0 0 10px 0;
+  text-align: center;
+  font-size: 1.2em;
+}
+
+#statusPanel {
+  background-color: #ffffff;
+  border-radius: 6px;
+  padding: 10px;
+  border: 1px solid #e0e0e0;
+  min-height: 20px; /* Ensure it doesn't collapse */
+}
+
+#statusText {
+  margin: 0;
+  font-size: 0.9em;
+  color: #555;
+  text-align: center;
+}
+
+.action-button {
+  padding: 10px 15px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+  background-color: #e0e0e0; /* Default button color */
+  color: #333;
+}
+
+.action-button:hover {
+  background-color: #d1d1d1;
+}
+
+.action-button:active {
+  transform: scale(0.98);
+}
+
+.action-button.primary-action {
+  background-color: #4a90e2;
+  color: white;
+}
+
+.action-button.primary-action:hover {
+  background-color: #357ABD;
+}
+
+.action-button:disabled {
+  background-color: #cccccc;
+  color: #888888;
+  cursor: not-allowed;
+}
+
+#linkListContainer {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 10px;
+    max-height: 250px; /* 增加高度以适应章节分组 */
+    overflow-y: auto;
+    margin-top: 5px;
+}
+
+#selectAllContainer label {
+    font-size: 0.9em;
+    color: #555;
+    cursor: pointer;
+}
+
+#linkList {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.link-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #f9f9f9;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid #eee;
+}
+
+.link-item input[type="checkbox"] {
+    cursor: pointer;
+    accent-color: #4a90e2; /* Style checkbox color */
+}
+
+.link-item label {
+  font-size: 0.9em;
+  color: #333;
+  word-break: break-all; /* Prevent long names from overflowing */
+  flex-grow: 1; /* Allow label to take available space */
+  cursor: pointer;
+}
+
+/* Scrollbar styling (optional, for better aesthetics) */
+#linkListContainer::-webkit-scrollbar {
+  width: 8px;
+}
+
+#linkListContainer::-webkit-scrollbar-track {
+  background: #f1f1f1; 
+  border-radius: 10px;
+}
+ 
+#linkListContainer::-webkit-scrollbar-thumb {
+  background: #c1c1c1; 
+  border-radius: 10px;
+}
+
+#linkListContainer::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8; 
+}
+
+/* 章节列表样式 */
+.chapter-header {
+  font-weight: bold;
+  margin: 10px 0 5px 0;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 3px;
+  color: #4a90e2;
+  font-size: 1em;
+  background-color: #f5f8ff;
+  padding: 5px 8px;
+  border-radius: 4px 4px 0 0;
+}
+
+/* 章节内课件样式 */
+.chapter-links .link-item {
+  margin-left: 10px;
+  border-left: 2px solid #eee;
+  padding-left: 8px;
+} 

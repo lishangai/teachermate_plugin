@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>微助教批量下载</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h3>PPT批量下载中心</h3>
+    <div id="statusPanel">
+      <p id="statusText">请先扫描页面上的课件链接。</p>
+      <p style="font-size: 0.8em; color: #666; margin-top: 5px;">支持课件列表页和章节页面扫描</p>
+    </div>
+    <button id="scanLinks" class="action-button">🔍 扫描页面课件</button>
+    <div id="linkListContainer">
+        <div id="selectAllContainer" style="display: none; margin-bottom: 5px;">
+            <input type="checkbox" id="selectAllCheckbox"> 
+            <label for="selectAllCheckbox">全选/全不选</label>
+        </div>
+        <div id="linkList" class="chapter-links"></div>
+    </div>
+    <button id="startDownload" class="action-button primary-action" disabled>🚀 开始批量下载 (<span id="selectedCount">0</span>)</button>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html> 
