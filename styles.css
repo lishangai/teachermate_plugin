@@ -176,4 +176,84 @@ h3 {
   margin-left: 10px;
   border-left: 2px solid #eee;
   padding-left: 8px;
+}
+
+/* 添加开关按钮样式 */
+.settings-panel {
+  margin: 10px 0;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.switch-container {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.switch-label {
+  margin-left: 10px;
+  font-weight: bold;
+}
+
+.setting-description {
+  margin: 5px 0 0 35px;
+  font-size: 0.8em;
+  color: #666;
+}
+
+/* 滑动开关样式 */
+.slider {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+  background-color: #ccc;
+  border-radius: 20px;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  border-radius: 50%;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/* 隐藏原始复选框 */
+.switch-container input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-container {
+    padding: 5px;
+    border-radius: 4px;
+    background-color: #f5f5f5;
+    font-size: 0.9em;
+}
+
+.settings-container label {
+    color: #666;
+    margin-left: 5px;
+    cursor: pointer;
+}
+
+.settings-container input[type="checkbox"] {
+    cursor: pointer;
 } 

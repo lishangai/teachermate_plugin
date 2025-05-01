@@ -5,31 +5,25 @@ let isProcessing = false; // Flag to prevent concurrent processing
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 处理下载请求
   if (request.type === 'downloadPPT') {
-    // Generate a more robust unique ID
     const taskId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     
-    // Basic validation
-    if (!request.url || !request.filename) {
-        console.error('Invalid download request received:', request);
-        // Optionally send a response back to content script indicating failure
-        // sendResponse({ status: 'error', message: 'Invalid URL or filename' });
-        return false; // Indicate async response won't be sent or message failed
-    }
-
     downloadQueue.set(taskId, {
       status: 'pending',
       url: request.url,
       filename: request.filename,
-      retries: 0 // Add retry counter
+      retries: 0,
+      maxRetries: 3
     });
     
-    console.log(`Task ${taskId} added to queue: ${request.filename}`);
-    // Trigger processing immediately if not already running
+    console.log(`添加下载任务: ${taskId}`, request);
+    
     if (!isProcessing) {
-        processDownloadQueue();
+      processDownloadQueue();
     }
-    // Indicate that we might send a response asynchronously (though we don't in this specific case)
-    return true; 
+    
+    // 立即返回响应
+    sendResponse({ success: true, taskId });
+    return true;
   }
   
   // 添加: 处理批量下载请求，转发给内容脚本
@@ -52,93 +46,165 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false; // 未处理消息
 });
 
+// 注册通知事件监听，当前页面是Office预览页时自动提取URL
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url && tab.url.includes('view.officeapps.live.com')) {
+    console.log('检测到Office预览页面加载完成:', tab.url);
+    
+    // 向该标签页注入内容脚本（以防内容脚本未自动加载）
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        // 检查内容脚本是否已加载
+        if (!window.PPT_DOWNLOADER_LOADED) {
+          console.log('内容脚本未加载，通知后台直接处理');
+          // 通知后台直接处理URL
+          chrome.runtime.sendMessage({
+            type: 'autoDownload',
+            url: window.location.href
+          });
+        }
+      }
+    }).catch(err => console.error('注入脚本失败:', err));
+  }
+});
+
+// 处理自动下载请求
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'autoDownload' && request.url) {
+    console.log('收到自动下载请求:', request.url);
+    processUrl(request.url);
+    return true;
+  }
+});
+
 async function processDownloadQueue() {
-  if (isProcessing) return; // Prevent multiple concurrent runs
+  if (isProcessing) return;
   isProcessing = true;
-  console.log('Processing download queue...');
-
-  const tasksToProcess = Array.from(downloadQueue.entries())
-                             .filter(([taskId, task]) => task.status === 'pending');
-
-  if (tasksToProcess.length === 0) {
-      console.log('Download queue is empty.');
-      isProcessing = false;
-      return;
-  }
-
-  // Process one task at a time to avoid overwhelming the browser or network
-  const [taskId, task] = tasksToProcess[0]; 
-
+  
   try {
-    downloadQueue.set(taskId, { ...task, status: 'downloading' });
-    console.log(`Attempting download for task ${taskId}: ${task.filename}`);
-    
-    // Use await with the downloads API (it returns a Promise)
-    const downloadId = await chrome.downloads.download({
-      url: task.url,
-      filename: sanitizeFilename(task.filename), // Sanitize filename
-      conflictAction: 'uniquify', // Automatically rename if filename exists
-      saveAs: false // Do not prompt user for save location
-    });
-
-    if (!downloadId) {
-        // If downloadId is undefined, the download failed to start
-        throw new Error('chrome.downloads.download did not return a download ID.');
+    for (const [taskId, task] of downloadQueue) {
+      if (task.status !== 'pending') continue;
+      
+      console.log(`处理下载任务: ${taskId}`, task);
+      
+      try {
+        downloadQueue.set(taskId, { ...task, status: 'downloading' });
+        
+        // 预处理URL
+        const processedUrl = await preprocessDownloadUrl(task.url);
+        
+        // 开始下载
+        const downloadId = await chrome.downloads.download({
+          url: processedUrl,
+          filename: sanitizeFilename(task.filename),
+          conflictAction: 'uniquify',
+          saveAs: false
+        });
+        
+        console.log(`下载已开始: ${downloadId}`, task);
+        
+        // 更新任务状态
+        downloadQueue.set(taskId, { 
+          ...task, 
+          status: 'started',
+          downloadId 
+        });
+        
+        // 监听下载完成事件
+        chrome.downloads.onChanged.addListener(function onChanged(delta) {
+          if (delta.id === downloadId) {
+            if (delta.state && delta.state.current === 'complete') {
+              console.log(`下载完成: ${downloadId}`);
+              downloadQueue.delete(taskId);
+              chrome.downloads.onChanged.removeListener(onChanged);
+            } else if (delta.error) {
+              console.error(`下载出错: ${downloadId}`, delta.error);
+              handleDownloadError(taskId, task, delta.error.current);
+              chrome.downloads.onChanged.removeListener(onChanged);
+            }
+          }
+        });
+        
+      } catch (error) {
+        console.error(`处理下载任务失败: ${taskId}`, error);
+        handleDownloadError(taskId, task, error.message);
+      }
+      
+      // 添加间隔，避免并发下载
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
+  } finally {
+    isProcessing = false;
     
-    // Monitor download status (optional but good practice)
-    // This requires the downloads API event listeners, adding complexity.
-    // For simplicity here, we assume success if the API call succeeds.
-    // In a production extension, you'd add listeners for onChanged, onDeterminingFilename etc.
-
-    console.log(`Download started for task ${taskId} (Download ID: ${downloadId}): ${task.filename}`);
-    downloadQueue.delete(taskId); // Remove successful task from queue
-
-  } catch (error) {
-    console.error(`Download failed for task ${taskId} (${task.filename}):`, error);
-    const updatedTask = { 
-      ...task, 
-      status: 'failed',
-      error: error.message,
-      retries: (task.retries || 0) + 1
-    };
-
-    if (updatedTask.retries <= 3) { // Limit retries
-        console.log(`Task ${taskId} failed, attempt ${updatedTask.retries}. Will retry.`);
-        downloadQueue.set(taskId, { ...updatedTask, status: 'pending' }); // Set back to pending for retry
-    } else {
-        console.error(`Task ${taskId} failed after ${updatedTask.retries} retries. Giving up.`);
-        downloadQueue.set(taskId, updatedTask); // Keep in queue as permanently failed
+    // 检查是否还有待处理的任务
+    const pendingTasks = Array.from(downloadQueue.values()).filter(t => t.status === 'pending');
+    if (pendingTasks.length > 0) {
+      setTimeout(processDownloadQueue, 1000);
     }
   }
+}
 
-  // Process next item after a short delay, regardless of success/failure
-  setTimeout(() => {
-    isProcessing = false;
-    processDownloadQueue(); // Trigger next iteration
-  }, 500); // Short delay between downloads
+async function preprocessDownloadUrl(url) {
+  try {
+    // 处理特殊字符
+    url = decodeURIComponent(url).replace(/&amp;/g, '&');
+    
+    // 检查URL是否需要重定向
+    const response = await fetch(url, { 
+      method: 'HEAD',
+      redirect: 'manual'
+    });
+    
+    if (response.status === 301 || response.status === 302) {
+      const redirectUrl = response.headers.get('location');
+      if (redirectUrl) {
+        console.log('URL重定向:', redirectUrl);
+        return redirectUrl;
+      }
+    }
+    
+    return url;
+  } catch (error) {
+    console.error('预处理URL失败:', error);
+    return url;
+  }
+}
+
+function handleDownloadError(taskId, task, errorMessage) {
+  if (task.retries < task.maxRetries) {
+    // 重试
+    downloadQueue.set(taskId, {
+      ...task,
+      status: 'pending',
+      retries: task.retries + 1,
+      lastError: errorMessage
+    });
+    
+    console.log(`安排重试下载: ${taskId} (第 ${task.retries + 1} 次)`);
+    
+    // 延迟重试
+    setTimeout(() => {
+      if (!isProcessing) {
+        processDownloadQueue();
+      }
+    }, 2000 * (task.retries + 1));
+  } else {
+    console.error(`下载失败，已达到最大重试次数: ${taskId}`);
+    downloadQueue.set(taskId, {
+      ...task,
+      status: 'failed',
+      error: errorMessage
+    });
+  }
 }
 
 function sanitizeFilename(name) {
-  // More robust sanitization
-  // Remove control characters, reserved characters, leading/trailing dots/spaces
-  let sanitized = name
-    .replace(/[\/\:*?"<>|\x00-\x1F]/g, '_') // Replace reserved chars and control chars with underscore
-    .replace(/^\.+|\.+$|^\s+|\s+$/g, '') // Trim leading/trailing dots and whitespace
-    .replace(/\.+/g, '.'); // Replace multiple dots with single dot
-    
-  // Ensure filename is not empty after sanitization
-  sanitized = sanitized || 'downloaded_file'; 
-
-  // Truncate if too long (considering potential uniquify additions by browser)
-  const maxLength = 200;
-  if (sanitized.length > maxLength) {
-    const extensionMatch = sanitized.match(/(\.[^.]+)$/);
-    const extension = extensionMatch ? extensionMatch[1] : '';
-    const nameWithoutExt = sanitized.substring(0, sanitized.length - extension.length);
-    sanitized = nameWithoutExt.substring(0, maxLength - extension.length) + extension;
-  }
-  return sanitized;
+  return name
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 200);
 }
 
 // Remove the interval-based retry logic, as retries are now handled within processDownloadQueue
@@ -232,45 +298,11 @@ async function processUrl(originalUrl) {
         console.log('服务器返回200状态码（无重定向），尝试从响应内容中提取URL');
         
         const text = await response.text();
+        finalUrl = extractDownloadUrl(text);
         
-        // 使用新方法：先查找OSSAccessKeyId参数，再向前找https://
-        if (text.includes('OSSAccessKeyId')) {
-          console.log('在响应文本中发现OSSAccessKeyId参数');
-          
-          // 获取OSSAccessKeyId参数的位置
-          const ossIndex = text.indexOf('?OSSAccessKeyId');
-          if (ossIndex > 0) {
-            // 向前查找最后一个https://
-            const startIndex = text.lastIndexOf('https://', ossIndex);
-            
-            if (startIndex >= 0) {
-              // 提取https://到?OSSAccessKeyId之间的内容
-              finalUrl = text.substring(startIndex, ossIndex);
-              console.log('从响应文本中提取到的下载链接:', finalUrl);
-            } else {
-              console.log('无法找到https://前缀，尝试使用其他方法');
-              // 继续使用其他方法
-            }
-          }
-        }
-        
-        // 如果上面的方法未能提取到URL，则尝试使用正则表达式
         if (!finalUrl) {
-          // 修改正则表达式，确保提取完整URL（包括查询参数）
-          const urlMatch = text.match(/https:\/\/app\.teachermate\.(?:com\.cn|cn)\/[A-Za-z0-9]+-\d+-[^"'\s<>]+(?:\?[^"'\s<>]+)?/);
-          if (urlMatch) {
-            finalUrl = urlMatch[0];
-            console.log('从响应文本中成功提取URL:', finalUrl);
-          } else {
-            // 如果响应中找不到URL，尝试其他可能的模式
-            const altMatch = text.match(/https:\/\/app\.teachermate\.(?:com\.cn|cn)\/[A-Za-z0-9]+-\d+(?:\?[^"'\s<>]+)?/);
-            if (altMatch) {
-              finalUrl = altMatch[0];
-              console.log('从响应文本中提取到简短URL:', finalUrl);
-            } else {
-              throw new Error(`无法从响应中提取下载URL (状态码: ${response.status})`);
-            }
-          }
+          console.error('无法从响应内容中提取下载URL');
+          throw new Error('无法从响应中提取下载URL');
         }
       } else {
         console.error('服务器返回非预期状态码:', response.status);
@@ -281,133 +313,13 @@ async function processUrl(originalUrl) {
       throw error;
     }
     
-    // 3. 处理最终URL - 根据用户提供的新流程
+    // 3. 处理最终URL - 使用优化的URL提取方法
     if (finalUrl) {
-      try {
-        // 首先检查是否包含OSSAccessKeyId参数
-        if (finalUrl.includes('OSSAccessKeyId=')) {
-          console.log('发现包含OSSAccessKeyId参数的URL:', finalUrl);
-          
-          // 获取OSSAccessKeyId参数的位置
-          const ossIndex = finalUrl.indexOf('?OSSAccessKeyId');
-          if (ossIndex > 0) {
-            // 向前查找最后一个https://
-            const startIndex = finalUrl.lastIndexOf('https://', ossIndex);
-            
-            if (startIndex >= 0) {
-              // 提取https://到?OSSAccessKeyId之间的内容
-              finalUrl = finalUrl.substring(startIndex, ossIndex);
-              console.log('提取到的下载链接:', finalUrl);
-              // 替换编码的空格
-              finalUrl = finalUrl.replace(/%20/g, ' ');
-            } else {
-              // 如果找不到https://，则使用?前的内容
-              finalUrl = finalUrl.split('?')[0];
-              console.log('无法找到https://前缀，使用问号前的URL:', finalUrl);
-            }
-          } else {
-            // 降级处理：使用问号前的内容
-            finalUrl = finalUrl.split('?')[0];
-            console.log('无法找到?OSSAccessKeyId，使用问号前的URL:', finalUrl);
-          }
-        }
-        // 检查是否是teachermate域名
-        else if (finalUrl.includes('teachermate.com.cn') || finalUrl.includes('teachermate.cn')) {
-          console.log('处理teachermate URL');
-          
-          // 提取格式为"app.teachermate.com.cn/[一串字母]-[一串数字]-[ppt文件名]"的部分
-          const pattern = /(https?:\/\/.*?teachermate\.(?:com\.cn|cn)\/[A-Za-z0-9]+-\d+-[^?&]+)/;
-          const match = finalUrl.match(pattern);
-          
-          if (match) {
-            finalUrl = match[1];
-            console.log('提取后的URL:', finalUrl);
-          } else {
-            // 如果没有匹配到特定格式，尝试删除所有查询参数
-            finalUrl = finalUrl.split('?')[0];
-            console.log('移除查询参数后的URL:', finalUrl);
-          }
-          // 替换编码的空格
-          finalUrl = finalUrl.replace(/%20/g, ' ');
-        }
-      } catch (error) {
-        console.error('处理最终URL失败:', error);
-        // 如果处理失败，继续使用重定向URL
-      }
+      finalUrl = extractDownloadUrl(finalUrl);
     }
     
     // 4. 提取文件名
-    let filename = '';
-    try {
-      // 从URL路径中提取文件名
-      const pathParts = finalUrl.split('/');
-      let lastPart = pathParts[pathParts.length - 1].split('?')[0];
-      
-      // 尝试从最后一段提取文件名
-      const filenameMatch = lastPart.match(/[A-Za-z0-9]+-\d+-(.+)/);
-      if (filenameMatch && filenameMatch[1]) {
-        // 标准格式URL: 提取第三部分作为文件名
-        filename = filenameMatch[1];
-        console.log('从标准URL格式提取文件名:', filename);
-      } else {
-        // 简化URL格式: 可能只有两部分 (例如 fN5Ke-1739834885236)
-        const simpleMatch = lastPart.match(/[A-Za-z0-9]+-(\d+)/);
-        if (simpleMatch && simpleMatch[1]) {
-          // 尝试根据时间戳生成一个更有意义的文件名
-          const timestamp = parseInt(simpleMatch[1]);
-          if (!isNaN(timestamp)) {
-            try {
-              // 尝试将时间戳转换为日期，格式化为文件名
-              const date = new Date(timestamp);
-              if (date && date.getFullYear() > 2000) { // 有效日期
-                filename = `课件_${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}_${date.getHours().toString().padStart(2,'0')}${date.getMinutes().toString().padStart(2,'0')}`;
-                console.log('从时间戳生成文件名:', filename);
-              } else {
-                filename = `课件_${simpleMatch[1]}`;
-              }
-            } catch (e) {
-              filename = `课件_${simpleMatch[1]}`;
-            }
-          } else {
-            filename = lastPart; // 使用整个最后部分
-          }
-        } else {
-          // 如果没有匹配到任何模式，使用整个最后部分
-          filename = lastPart;
-        }
-      }
-      
-      // 检查是否有扩展名，如果没有，添加.pptx
-      if (!filename.includes('.')) {
-        // 基于URL分析尝试确定最可能的文件类型
-        let extension = '.pptx'; // 默认为pptx
-        
-        // 检查原始URL或最终URL中是否有文件类型提示
-        const originalUrlLower = url.toLowerCase();
-        const finalUrlLower = finalUrl.toLowerCase();
-        
-        if (originalUrlLower.includes('=pdf') || finalUrlLower.includes('pdf')) {
-          extension = '.pdf';
-        } else if (originalUrlLower.includes('=doc') || finalUrlLower.includes('doc')) {
-          extension = '.docx';
-        } else if (originalUrlLower.includes('=xls') || finalUrlLower.includes('excel')) {
-          extension = '.xlsx';
-        }
-        
-        filename += extension;
-      }
-      
-      // 确保文件名不为空
-      if (!filename || filename.length === 0) {
-        throw new Error('无法提取文件名');
-      }
-      
-      // 最终清理：替换文件名中的非法字符
-      filename = filename.replace(/[\\/:*?"<>|]/g, '_');
-    } catch (error) {
-      console.warn('提取文件名失败，使用默认文件名:', error);
-      filename = `课件_${Date.now()}.pptx`;
-    }
+    let filename = extractFilename(finalUrl);
     
     console.log('最终文件名:', filename);
     console.log('最终下载URL:', finalUrl);
@@ -428,6 +340,146 @@ async function processUrl(originalUrl) {
   } catch (error) {
     console.error('处理URL失败:', error);
   }
+}
+
+// 新增：优化的URL提取函数
+function extractDownloadUrl(input) {
+  // 先检查输入类型
+  const text = typeof input === 'string' ? input : String(input);
+  
+  try {
+    // 1. 优先使用用户建议的策略：查找OSSAccessKeyId参数，然后向前查找https://
+    if (text.includes('OSSAccessKeyId')) {
+      console.log('发现OSSAccessKeyId参数，使用优化提取策略');
+      
+      const ossIndex = text.indexOf('?OSSAccessKeyId');
+      if (ossIndex > 0) {
+        // 向前查找最后一个https://
+        const startIndex = text.lastIndexOf('https://', ossIndex);
+        
+        if (startIndex >= 0) {
+          // 提取https://到?OSSAccessKeyId之间的内容
+          const extractedUrl = text.substring(startIndex, ossIndex);
+          console.log('使用优化策略提取到URL:', extractedUrl);
+          return extractedUrl.replace(/%20/g, ' ');
+        }
+      }
+    }
+    
+    // 2. 如果找不到OSSAccessKeyId参数，或者提取失败，尝试使用正则表达式查找teachermate链接
+    const teachermatePattern = /(https:\/\/app\.teachermate\.(?:com\.cn|cn)\/[A-Za-z0-9]+-\d+-[^?&\s"'<>]+)/;
+    const teachermateMatch = text.match(teachermatePattern);
+    
+    if (teachermateMatch) {
+      console.log('使用正则表达式提取到teachermate URL:', teachermateMatch[1]);
+      return teachermateMatch[1].replace(/%20/g, ' ');
+    }
+    
+    // 3. 如果是URL对象，尝试清理查询参数
+    if (text.startsWith('http')) {
+      try {
+        const urlObj = new URL(text);
+        const paramsToRemove = ['OSSAccessKeyId', 'Expires', 'Signature', 'exires', 'accesskeyid', 'signature']; 
+        
+        paramsToRemove.forEach(param => {
+          if (urlObj.searchParams.has(param)) {
+            urlObj.searchParams.delete(param);
+          }
+        });
+        
+        // 清理空查询字符串
+        let cleanedUrl = urlObj.toString();
+        if (cleanedUrl.endsWith('?')) {
+          cleanedUrl = cleanedUrl.slice(0, -1);
+        }
+        
+        console.log('通过URL对象清理参数后:', cleanedUrl);
+        return cleanedUrl.replace(/%20/g, ' ');
+      } catch (e) {
+        console.warn('URL解析失败:', e);
+      }
+    }
+    
+    // 4. 最后的尝试：提取任何看起来像URL的内容
+    const anyUrlPattern = /(https?:\/\/[^\s"'<>]+)/;
+    const anyUrlMatch = text.match(anyUrlPattern);
+    
+    if (anyUrlMatch) {
+      console.log('使用通用URL提取策略:', anyUrlMatch[1]);
+      return anyUrlMatch[1].replace(/%20/g, ' ');
+    }
+    
+    // 如果所有策略都失败，返回原始输入
+    console.warn('所有URL提取策略均失败，返回原始输入');
+    return text;
+  } catch (e) {
+    console.error('URL提取过程出错:', e);
+    return text;
+  }
+}
+
+// 新增：优化的文件名提取函数
+function extractFilename(url) {
+  try {
+    // 尝试从URL提取文件名
+    const pathParts = url.split('/');
+    let lastPart = pathParts[pathParts.length - 1].split('?')[0];
+    
+    // 尝试从标准格式URL提取文件名
+    const filenameMatch = lastPart.match(/[A-Za-z0-9]+-\d+-(.+)/);
+    if (filenameMatch && filenameMatch[1]) {
+      // 标准格式：提取第三部分作为文件名
+      let filename = filenameMatch[1];
+      console.log('从标准URL格式提取文件名:', filename);
+      
+      // 检查扩展名并处理
+      return ensureFileExtension(filename);
+    }
+    
+    // 尝试从简化格式URL提取文件名
+    const simpleMatch = lastPart.match(/[A-Za-z0-9]+-(\d+)/);
+    if (simpleMatch && simpleMatch[1]) {
+      // 使用时间戳生成文件名
+      const timestamp = parseInt(simpleMatch[1]);
+      let filename = '';
+      
+      if (!isNaN(timestamp)) {
+        try {
+          const date = new Date(timestamp);
+          if (date && date.getFullYear() > 2000) {
+            filename = `课件_${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}_${date.getHours().toString().padStart(2,'0')}${date.getMinutes().toString().padStart(2,'0')}`;
+          } else {
+            filename = `课件_${simpleMatch[1]}`;
+          }
+        } catch (e) {
+          filename = `课件_${simpleMatch[1]}`;
+        }
+      } else {
+        filename = lastPart;
+      }
+      
+      // 检查扩展名并处理
+      return ensureFileExtension(filename);
+    }
+    
+    // 如果以上尝试均失败，使用最后一段路径作为文件名
+    return ensureFileExtension(lastPart);
+  } catch (e) {
+    console.error('提取文件名时出错:', e);
+    return ensureFileExtension(`课件_${Date.now()}`);
+  }
+}
+
+// 新增：确保文件名有正确的扩展名
+function ensureFileExtension(filename) {
+  // 检查是否已有扩展名
+  if (!filename.includes('.')) {
+    // 默认使用pptx扩展名
+    filename += '.pptx';
+  }
+  
+  // 清理文件名中的非法字符
+  return filename.replace(/[\\/:*?"<>|]/g, '_').substring(0, 200);
 }
 
 console.log('Background service worker started.'); 

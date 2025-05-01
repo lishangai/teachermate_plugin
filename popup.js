@@ -7,14 +7,15 @@ class BatchDownloadUI {
     this.selectedCountSpan = document.getElementById('selectedCount');
     this.selectAllContainer = document.getElementById('selectAllContainer');
     this.selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    this.autoDownloadToggle = document.getElementById('autoDownloadToggle');
     this.foundLinks = []; // Store the found links
     this.initialize();
   }
 
   initialize() {
     this.bindEvents();
-    // Restore settings or previous state could be added here if needed
-    // Example: this.restoreSettings(); 
+    // 加载保存的设置
+    this.loadSettings();
     this.updateStatus('等待扫描...');
   }
 
@@ -28,6 +29,11 @@ class BatchDownloadUI {
     });
     this.selectAllCheckbox.addEventListener('change', (event) => {
         this.toggleSelectAll(event.target.checked);
+    });
+    
+    // 添加自动下载开关事件
+    this.autoDownloadToggle.addEventListener('change', () => {
+      this.saveSettings();
     });
   }
 
@@ -558,16 +564,33 @@ class BatchDownloadUI {
     }
   }
   
-  // Optional: Method to restore settings (e.g., last selected items)
-  // restoreSettings() { 
-  //   chrome.storage.local.get(['lastScanResults'], (result) => {
-  //     if (result.lastScanResults) {
-  //       this.foundLinks = result.lastScanResults;
-  //       this.displayLinks(this.foundLinks);
-  //       this.updateStatus(`恢复了上次扫描的 ${this.foundLinks.length} 个链接。`);
-  //     }
-  //   });
-  // }
+  // 保存设置到Chrome存储
+  saveSettings() {
+    const settings = {
+      autoDownload: this.autoDownloadToggle.checked
+    };
+    
+    console.log('保存设置:', settings);
+    chrome.storage.sync.set({ settings: settings }, () => {
+      console.log('设置已保存');
+    });
+  }
+  
+  // 从Chrome存储加载设置
+  loadSettings() {
+    chrome.storage.sync.get('settings', (data) => {
+      if (data.settings) {
+        console.log('加载设置:', data.settings);
+        if (typeof data.settings.autoDownload === 'boolean') {
+          this.autoDownloadToggle.checked = data.settings.autoDownload;
+        }
+      } else {
+        // 默认设置
+        this.autoDownloadToggle.checked = true;
+        this.saveSettings();
+      }
+    });
+  }
 }
 
 // Initialize the UI logic when the popup DOM is ready
